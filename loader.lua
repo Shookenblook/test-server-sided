@@ -1,48 +1,47 @@
-local HttpService = game:GetService("HttpService")
+-- ============================================================
+-- MANGO UNIVERSAL LOADER: Polaris Edition
+-- Use this for execution in any game
+-- ============================================================
 
--- Ensure this URL is exactly correct and your repo is PUBLIC
-local BASE = "https://raw.githubusercontent.com/Shookenblook/test-server-sided/main/"
+-- Ensure the repository is PUBLIC on GitHub for this to work
+local BASE_URL = "https://raw.githubusercontent.com/Shookenblook/test-server-sided/main/"
 
-local function fetch(file)
-    local fullUrl = BASE .. file
-    print("[Loader] Attempting to fetch from: " .. fullUrl)
-    
+local function safeFetch(fileName)
+    -- HttpGet is used by executors to bypass standard Roblox HTTP limits
     local success, result = pcall(function()
-        return HttpService:GetAsync(fullUrl)
+        return game:HttpGet(BASE_URL .. fileName)
     end)
-    
-    if success and result and result ~= "nil" then
+
+    if success and result and result ~= "" then
         return result
     end
-    
-    warn("[Loader] Critical Failure for " .. file .. ": " .. tostring(result))
     return nil
 end
 
-print("[Loader] Starting...")
+print("[Mango] Initializing Universal Loader...")
 
--- Initialize Polaris Bridge
-local bridge = fetch("bridge.lua")
+-- 1. Load Bridge (Server-Side Logic)
+local bridge = safeFetch("bridge.lua")
 if bridge then
     local func, err = loadstring(bridge)
     if func then 
         task.spawn(func) 
-        print("[Loader] Bridge connected successfully.") 
+        print("[Mango] Bridge Linked.")
     else 
-        warn("[Loader] Syntax error in bridge.lua: " .. tostring(err)) 
+        warn("[Mango] Bridge Error: " .. tostring(err))
     end
+else
+    warn("[Mango] Failed to fetch Bridge. Check GitHub Visibility.")
 end
 
--- Initialize Polaris Main GUI/API
-local main = fetch("main.lua")
+-- 2. Load Main (Polaris API & GUI)
+local main = safeFetch("main.lua")
 if main then
     local func, err = loadstring(main)
     if func then 
         task.spawn(func) 
-        print("[Loader] Polaris API & GUI Online.") 
+        print("[Mango] Polaris GUI Online.")
     else 
-        warn("[Loader] Syntax error in main.lua: " .. tostring(err)) 
+        warn("[Mango] Main Logic Error: " .. tostring(err))
     end
 end
-
-print("[Loader] Done.")
