@@ -6,7 +6,7 @@ local HttpService       = game:GetService("HttpService")
 local Players           = game:GetService("Players")
 local StarterGui        = game:GetService("StarterGui")
 
-local BASE = "https://raw.githubusercontent.com/Shookenblook/Val-Privss/main/"
+local BASE = "https://github.com/Shookenblook/test-server-sided"
 
 -- Fetch a file from GitHub
 local function fetch(file)
