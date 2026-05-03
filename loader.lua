@@ -1,11 +1,6 @@
--- ============================================================
--- MANGO LOADER: Polaris Edition
--- Updated with GitHub Repository Path
--- ============================================================
-
 local HttpService = game:GetService("HttpService")
 
--- The base URL for your raw GitHub files
+-- Attempting the most direct Raw URL format
 local BASE = "https://raw.githubusercontent.com/Shookenblook/test-server-sided/main/"
 
 local function fetch(file)
@@ -13,41 +8,31 @@ local function fetch(file)
         return HttpService:GetAsync(BASE .. file)
     end)
     
-    if success and result and result ~= "nil" and result ~= "404: Not Found" then
+    if success and result then
+        -- Check if GitHub returned a 404 page instead of code
+        if result:find("404: Not Found") then
+            warn("[Loader] 404 Error: " .. file .. " not found at URL. Check branch name.")
+            return nil
+        end
         return result
     end
-    warn("[Loader] Failed to fetch: " .. file .. " | Error: " .. tostring(result))
+    
+    warn("[Loader] Network Error: " .. tostring(result))
     return nil
 end
 
-print("[Loader] Starting Mango initialization...")
+print("[Loader] Starting...")
 
--- 1. Initialize the Bridge (Server-side Logic)
-local bridgeCode = fetch("bridge.lua")
-if bridgeCode then
-    local func, err = loadstring(bridgeCode)
-    if func then 
-        task.spawn(func) 
-        print("[Loader] Bridge initialized successfully.")
-    else 
-        warn("[Loader] Bridge syntax error: " .. tostring(err)) 
-    end
-else
-    warn("[Loader] Bridge failed to load from GitHub!")
+local bridge = fetch("bridge.lua")
+if bridge then
+    local func, err = loadstring(bridge)
+    if func then task.spawn(func) print("[Loader] Bridge Online.") else warn(err) end
 end
 
--- 2. Initialize Main Logic (GUI & Polaris API)
-local mainCode = fetch("main.lua")
-if mainCode then
-    local func, err = loadstring(mainCode)
-    if func then 
-        task.spawn(func) 
-        print("[Loader] Polaris API and GUI online.")
-    else 
-        warn("[Loader] Main logic syntax error: " .. tostring(err)) 
-    end
-else
-    warn("[Loader] Main logic failed to load from GitHub!")
+local main = fetch("main.lua")
+if main then
+    local func, err = loadstring(main)
+    if func then task.spawn(func) print("[Loader] Polaris API Online.") else warn(err) end
 end
 
-print("[Loader] Process complete.")
+print("[Loader] Done.")
