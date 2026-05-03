@@ -1,63 +1,53 @@
--- loader.lua
-local HttpService = game:GetService("HttpService")
-local Players = game:GetService("Players")
+-- ============================================================
+-- MANGO LOADER: Polaris Edition
+-- Updated with GitHub Repository Path
+-- ============================================================
 
--- FIX 1: Must use the 'raw' GitHub domain and point to the main branch
+local HttpService = game:GetService("HttpService")
+
+-- The base URL for your raw GitHub files
 local BASE = "https://raw.githubusercontent.com/Shookenblook/test-server-sided/main/"
 
 local function fetch(file)
-    local ok, result = pcall(function()
-        return HttpService:GetAsync(BASE .. file, true)
+    local success, result = pcall(function()
+        return HttpService:GetAsync(BASE .. file)
     end)
-    if not ok or type(result) ~= "string" or #result == 0 then
-        warn("[Loader] Failed to fetch: " .. file .. " | " .. tostring(result))
-        return nil
-    end
-    print("[Loader] Fetched: " .. file)
-    return result
-end
-
-local function runServer(file)
-    local code = fetch(file)
-    if not code then return false end
     
-    local fn, err = loadstring(code)
-    if not fn then
-        warn("[Loader] Compile error in " .. file .. ": " .. tostring(err))
-        return false
+    if success and result and result ~= "nil" and result ~= "404: Not Found" then
+        return result
     end
-    
-    -- Pass the Players service to the script in case it needs it
-    local ok, err2 = pcall(fn, Players) 
-    if not ok then
-        warn("[Loader] Runtime error in " .. file .. ": " .. tostring(err2))
-        return false
+    warn("[Loader] Failed to fetch: " .. file .. " | Error: " .. tostring(result))
+    return nil
+end
+
+print("[Loader] Starting Mango initialization...")
+
+-- 1. Initialize the Bridge (Server-side Logic)
+local bridgeCode = fetch("bridge.lua")
+if bridgeCode then
+    local func, err = loadstring(bridgeCode)
+    if func then 
+        task.spawn(func) 
+        print("[Loader] Bridge initialized successfully.")
+    else 
+        warn("[Loader] Bridge syntax error: " .. tostring(err)) 
     end
-    
-    print("[Loader] Server script loaded: " .. file)
-    return true
+else
+    warn("[Loader] Bridge failed to load from GitHub!")
 end
 
--- ============================================================
--- BOOT
--- ============================================================
-print("[Loader] Starting...")
-
--- 1. Load Bridge (Connects to your local Node.js server)
-local bridgeOk = runServer("bridge.lua")
-if not bridgeOk then
-    warn("[Loader] Bridge failed!")
+-- 2. Initialize Main Logic (GUI & Polaris API)
+local mainCode = fetch("main.lua")
+if mainCode then
+    local func, err = loadstring(mainCode)
+    if func then 
+        task.spawn(func) 
+        print("[Loader] Polaris API and GUI online.")
+    else 
+        warn("[Loader] Main logic syntax error: " .. tostring(err)) 
+    end
+else
+    warn("[Loader] Main logic failed to load from GitHub!")
 end
 
-task.wait(0.5)
-
--- 2. Load Main Logic (Handles Polaris functions and game manipulation)
-local mainOk = runServer("main.lua")
-if not mainOk then
-    warn("[Loader] Main logic failed!")
-end
-
--- FIX 2: GUI Injection removed because .Source is locked. 
--- Your GUI should be cloned from your Roblox Model inside main.lua instead.
-
-print("[Loader] Done.")
+print("[Loader] Process complete.")
