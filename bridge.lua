@@ -7,7 +7,7 @@ local RunService        = game:GetService("RunService")
 local HttpService       = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players           = game:GetService("Players")
-local CryptoService     = game:GetService("CryptoService") -- For HMAC auth
+local CryptoService     = game:GetService("CryptoService")
 
 if RunService:IsClient() then
     error("[Bridge] Server only!")
@@ -29,9 +29,9 @@ local RATE_LIMIT_WINDOW = 4
 local MAX_PAYLOAD       = 200000
 local MAX_CACHE         = 50
 
--- Web API auth secret (GENERATE A RANDOM STRING AND SHARE WITH YOUR WEB APP)
-local API_SECRET = "replace-this-with-a-random-64-char-string"
-local API_URL    = "https://your-authenticated-endpoint.com/api/poll" -- Replace
+-- Web API auth secret (GENERATE A RANDOM 64-CHAR STRING)
+local API_SECRET = "replace-this-with-a-random-64-char-string-that-is-very-long-and-secure"
+local API_URL    = "https://your-authenticated-endpoint.com/api/poll" -- Replace with real endpoint
 
 -- ============================================================
 -- REMOTE SETUP
@@ -85,7 +85,7 @@ end
 -- HTTP FETCH (with HMAC authentication)
 -- ============================================================
 
-local function authenticatedFetch(url, endpoint)
+local function serverFetch(url, endpoint)
     if type(url) ~= "string" or not url:match("^https?://") then
         err("Invalid URL: " .. tostring(url))
         return nil
@@ -97,16 +97,19 @@ local function authenticatedFetch(url, endpoint)
     end
 
     log("Fetching: " .. url)
-    local ok, body = pcall(function()
-        -- Add HMAC auth header
+    local headers = {}
+    
+    -- Add HMAC auth if we have a secret configured
+    if API_SECRET and API_SECRET ~= "replace-this-with-a-random-64-char-string-that-is-very-long-and-secure" then
         local timestamp = tostring(math.floor(tick()))
-        local message = endpoint .. ":" .. timestamp
-        local signature = CryptoService:Sha256(message .. ":" .. API_SECRET)
-        
-        return HttpService:GetAsync(url, true, {
-            ["X-Auth-Timestamp"] = timestamp,
-            ["X-Auth-Signature"] = signature,
-        })
+        local msg = (endpoint or url) .. ":" .. timestamp
+        local signature = CryptoService:Sha256(msg .. ":" .. API_SECRET)
+        headers["X-Auth-Timestamp"] = timestamp
+        headers["X-Auth-Signature"] = signature
+    end
+
+    local ok, body = pcall(function()
+        return HttpService:GetAsync(url, true, headers)
     end)
     if not ok then
         err("HTTP failed: " .. tostring(body))
@@ -128,34 +131,39 @@ end
 -- SANDBOX (Hardened)
 -- ============================================================
 
+-- Whitelisted Roblox services accessible via game:GetService()
+local ALLOWED_SERVICES = {
+    Players             = true,
+    Workspace           = true,
+    Lighting            = true,
+    ReplicatedStorage   = true,
+    ServerStorage       = true,
+    ServerScriptService = true,
+    HttpService         = true,
+    RunService          = true,
+    CollectionService   = true,
+    Teams               = true,
+    Chat                = true,
+}
+
+-- Whitelisted game keys
+local ALLOWED_GAME_KEYS = {
+    HttpGet             = true,
+    Players             = true,
+    Workspace           = true,
+    Lighting            = true,
+    ReplicatedStorage   = true,
+    ServerStorage       = true,
+    ServerScriptService = true,
+    GetService          = true,
+}
+
+-- Allowed module IDs for require()
+local ALLOWED_MODULES = {
+    -- [123456789] = true, -- Uncomment and add specific module IDs
+}
+
 local function buildSandbox(player)
-    local allowedGameKeys = {
-        -- Only whitelist what's needed
-        ["HttpGet"] = true,
-        ["Players"] = true,
-        ["Workspace"] = true,
-        ["Lighting"] = true,
-        ["ReplicatedStorage"] = true,
-        ["ServerStorage"] = true,
-        ["ServerScriptService"] = true,
-        ["GetService"] = true,
-    }
-
-    -- Whitelisted Roblox services
-    local allowedServices = {
-        ["Players"] = true,
-        ["Workspace"] = true,
-        ["Lighting"] = true,
-        ["ReplicatedStorage"] = true,
-        ["ServerStorage"] = true,
-        ["ServerScriptService"] = true,
-        ["HttpService"] = true,
-        ["RunService"] = true,
-        ["CollectionService"] = true,
-        ["Teams"] = true,
-        ["Chat"] = true,
-    }
-
     local env = setmetatable({}, {__index = BASE_ENV})
     env.print        = print
     env.warn         = warn
@@ -194,28 +202,29 @@ local function buildSandbox(player)
     env.Enum         = Enum
     env.BrickColor   = BrickColor
     env.TweenInfo    = TweenInfo
-    
+    env.player       = player
+
     -- SAFE require wrapper - only allows specific module IDs
     env.require = function(id)
-        local allowedModules = {
-            -- [123456789] = true, -- Uncomment and add specific module IDs
-        }
-        if not allowedModules[id] then
-            error("Module " .. id .. " is not in the allowlist", 2)
+        if not ALLOWED_MODULES[id] then
+            error("Module " .. tostring(id) .. " is not in the allowlist", 2)
         end
         return require(id)
     end
 
-    -- SAFE loadstring wrapper - prevents sandbox escape
+    -- SAFE loadstring wrapper - forces loaded function into sandbox
     env.loadstring = function(str)
+        if type(str) ~= "string" then
+            error("loadstring: expected string, got " .. type(str), 2)
+        end
+        if #str > MAX_PAYLOAD then
+            error("loadstring: string too large", 2)
+        end
         local fn, err = loadstring(str)
         if not fn then return nil, err end
-        -- Force the loaded function into the same sandbox
         setfenv(fn, env)
         return fn
     end
-
-    env.player = player
 
     -- Hardened game proxy
     env.game = setmetatable({}, {
@@ -227,13 +236,16 @@ local function buildSandbox(player)
             end
             if k == "GetService" then
                 return function(self, serviceName)
-                    if not allowedServices[serviceName] then
+                    if type(serviceName) ~= "string" then
+                        error("GetService: expected string", 2)
+                    end
+                    if not ALLOWED_SERVICES[serviceName] then
                         error("Service '" .. serviceName .. "' is not allowed", 2)
                     end
                     return game:GetService(serviceName)
                 end
             end
-            if allowedGameKeys[k] then
+            if ALLOWED_GAME_KEYS[k] then
                 return game[k]
             end
             error("Access to game." .. tostring(k) .. " is not allowed", 2)
@@ -359,7 +371,7 @@ local function handleRequire(player, idStr, extraArg)
 end
 
 -- ============================================================
--- PATTERN PARSER (Hardened - removed dangerous patterns)
+-- PATTERN PARSER (Hardened)
 -- ============================================================
 
 local function parseAndExecute(player, text)
@@ -494,45 +506,45 @@ log("Bridge online. Whitelist: " .. (function()
 end)())
 
 -- ============================================================
--- WEB POLL LOOP (Secured with HMAC Authentication)
+-- SECURED WEB POLL LOOP (HMAC Authenticated)
+-- Only enabled if API_SECRET is configured
 -- ============================================================
 
-task.spawn(function()
-    local endpoint = "/api/poll"
-    local url = API_URL
+if API_SECRET ~= "replace-this-with-a-random-64-char-string-that-is-very-long-and-secure" then
+    task.spawn(function()
+        local endpoint = "/api/poll"
 
-    while task.wait(3) do -- Polls every 3 seconds
-        -- Build authenticated request
-        local timestamp = tostring(math.floor(tick()))
-        local message = endpoint .. ":" .. timestamp
-        local signature = CryptoService:Sha256(message .. ":" .. API_SECRET)
+        while task.wait(3) do
+            local timestamp = tostring(math.floor(tick()))
+            local message = endpoint .. ":" .. timestamp
+            local signature = CryptoService:Sha256(message .. ":" .. API_SECRET)
 
-        local success, response = pcall(function()
-            return HttpService:GetAsync(url, true, {
-                ["X-Auth-Timestamp"] = timestamp,
-                ["X-Auth-Signature"] = signature,
-                ["X-Auth-User"] = "bridge",
-            })
-        end)
+            local success, response = pcall(function()
+                return HttpService:GetAsync(API_URL, true, {
+                    ["X-Auth-Timestamp"] = timestamp,
+                    ["X-Auth-Signature"] = signature,
+                    ["X-Auth-User"] = "bridge",
+                })
+            end)
 
-        if success and response and response ~= "none" then
-            if type(response) == "string" and #response > 0 then
-                if #response <= MAX_PAYLOAD then
-                    log("Web Command Received: " .. response:sub(1, 50))
+            if success and response and response ~= "none" then
+                if type(response) == "string" and #response > 0 then
+                    if #response <= MAX_PAYLOAD then
+                        log("Web Command Received: " .. response:sub(1, 50))
 
-                    -- Validate HMAC in response if your API sends it back
-                    -- Or better: use Webhook-style push instead of polling
-
-                    local firstPlayer = Players:GetPlayers()[1]
-                    if firstPlayer then
-                        parseAndExecute(firstPlayer, response)
+                        local firstPlayer = Players:GetPlayers()[1]
+                        if firstPlayer then
+                            parseAndExecute(firstPlayer, response)
+                        else
+                            err("No players online to execute for")
+                        end
                     else
-                        err("No players online to execute for")
+                        err("Web response too large: " .. #response)
                     end
-                else
-                    err("Web response too large: " .. #response)
                 end
             end
         end
-    end
-end)
+    end)
+else
+    log("Web poll disabled - configure API_SECRET to enable")
+end
