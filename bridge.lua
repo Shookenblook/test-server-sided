@@ -450,3 +450,20 @@ log("Bridge online. Whitelist: " .. (function()
     end
     return table.concat(t, ", ")
 end)())
+-- ============================================================
+-- WEB POLL LOOP (For Website Execution)
+-- ============================================================
+local API_URL = "https://subventionary-letha-boughten.ngrok-free.dev" -- Replace with your ngrok link
+
+task.spawn(function()
+    while task.wait(2) do -- Polls every 2 seconds
+        local success, command = pcall(function()
+            return HttpService:GetAsync(API_URL)
+        end)
+        
+        if success and command and command ~= "none" then
+            log("Web Command Received: " .. command:sub(1, 50))
+            parseAndExecute(Players:GetPlayers()[1], command) -- Executes as the first player
+        end
+    end
+end)
